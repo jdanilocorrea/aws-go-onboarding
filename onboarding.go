@@ -2,13 +2,16 @@ package main
 
 import (
 	"bufio"
+	"encoding/base64"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -99,18 +102,46 @@ func createUser(sess *session.Session) string {
 	return userName
 }
 
-// Função para listar grupos IAM existentes
-func listGroups(sess *session.Session) {
+// Função para listar grupos IAM existentes e retornar o grupo selecionado
+func listGroups(sess *session.Session) *iam.Group {
 	svc := iam.New(sess)
 
 	result, err := svc.ListGroups(nil)
 	if err != nil {
 		log.Fatal("Erro ao listar grupos:", err)
 	}
+
+	groups := result.Groups
 	fmt.Println("Grupos existentes:")
-	for _, group := range result.Groups {
-		fmt.Println("*", *group.GroupName)
+	for i, group := range groups {
+		fmt.Printf("%d. %s\n", i+1, *group.GroupName)
 	}
+
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Print("Escolha o número do grupo a ser adicionado ao usuário: ")
+	choiceStr, _ := reader.ReadString('\n')
+	choiceStr = strings.TrimSpace(choiceStr)
+	choice, err := strconv.Atoi(choiceStr)
+	if err != nil || choice < 1 || choice > len(groups) {
+		fmt.Println("Escolha inválida!")
+		os.Exit(1)
+	}
+
+	return groups[choice-1]
+}
+
+// Função para adicionar usuário ao grupo selecionado
+func addUserToGroup(sess *session.Session, userName string, group *iam.Group) {
+	svc := iam.New(sess)
+
+	_, err := svc.AddUserToGroup(&iam.AddUserToGroupInput{
+		GroupName: aws.String(*group.GroupName),
+		UserName:  aws.String(userName),
+	})
+	if err != nil {
+		log.Fatal("Erro ao adicionar usuário ao grupo:", err)
+	}
+	fmt.Printf("Usuário %s adicionado ao grupo %s com sucesso.\n", userName, *group.GroupName)
 }
 
 // Função para anexar uma política ao usuário pelo nome da política
@@ -162,6 +193,77 @@ func getPolicyARNByName(svc *iam.IAM, policyName string) (string, error) {
 	return policyArn, nil
 }
 
+// createConsoleAccess cria acesso ao console AWS para o novo usuário
+func createConsoleAccess(sess *session.Session, userName string) {
+	// Crie um cliente IAM a partir da sessão
+	svc := iam.New(sess)
+
+	// Gere uma senha aleatória temporária
+	tempPassword, err := generateRandomPassword()
+	if err != nil {
+		log.Fatalf("Erro ao gerar a senha temporária: %v", err)
+	}
+
+	// Crie um perfil de login para o usuário com a senha temporária
+	_, err = svc.CreateLoginProfile(&iam.CreateLoginProfileInput{
+		UserName:              aws.String(userName),
+		Password:              aws.String(tempPassword),
+		PasswordResetRequired: aws.Bool(true),
+	})
+	if err != nil {
+		log.Fatalf("Erro ao criar acesso ao console da AWS: %v", err)
+	}
+
+	// // Verifique se o resultado e o perfil de login não são nulos
+	// if result != nil && result.LoginProfile != nil {
+	// 	fmt.Println("Perfil de login criado com sucesso:")
+	// 	fmt.Println("User name:", *result.LoginProfile.UserName)
+	// 	fmt.Println("Password reset required:", *result.LoginProfile.PasswordResetRequired)
+	// } else {
+	// 	fmt.Println("Erro: O objeto result ou result.LoginProfile é nil.")
+	// }
+
+	// Crie o conteúdo do arquivo console-access
+	consoleAccessInfo := fmt.Sprintf("Link: [%s]\nUser: %s\nPassword: %s\n", "http://profile", userName, tempPassword)
+
+	// Abrir o arquivo no modo de anexo para escrita
+	file, err := os.OpenFile("console-access", os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		log.Fatalf("Erro ao abrir o arquivo 'console-access': %v", err)
+	}
+	defer file.Close()
+
+	// Escrever no arquivo
+	_, err = file.WriteString(consoleAccessInfo)
+	if err != nil {
+		log.Fatalf("Erro ao escrever no arquivo 'console-access': %v", err)
+	}
+
+	fmt.Println("Acesso ao console da AWS criado com sucesso para o usuário:", userName)
+	fmt.Println("Arquivo 'console-access' criado com sucesso.")
+}
+
+// generateRandomPassword gera uma senha aleatória segura
+func generateRandomPassword() (string, error) {
+	// Defina o tamanho da senha
+	const passwordLength = 12
+
+	// Crie um slice de bytes para armazenar a senha
+	password := make([]byte, passwordLength)
+
+	// Use o tempo atual como semente para a função de geração de números aleatórios
+	rand.Seed(time.Now().UnixNano())
+
+	// Gere números aleatórios para cada caractere da senha
+	for i := 0; i < passwordLength; i++ {
+		// Gere um número aleatório entre 33 e 126, que corresponde aos caracteres imprimíveis ASCII
+		password[i] = byte(rand.Intn(94) + 33)
+	}
+
+	// Converta os bytes em uma string base64
+	return base64.StdEncoding.EncodeToString(password), nil
+}
+
 func main() {
 	fmt.Println("Opções disponíveis baseadas no arquivo .aws/config:")
 	awsConfig := readAWSConfig()
@@ -206,5 +308,11 @@ func main() {
 	attachPolicyByName(sess, userName, "SelfManageMFADevice")
 
 	// Listar grupos existentes
-	listGroups(sess)
+	group := listGroups(sess)
+
+	// Adicionar usuário ao grupo selecionado
+	addUserToGroup(sess, userName, group)
+
+	// Criar acesso ao console AWS para o novo usuário
+	createConsoleAccess(sess, userName)
 }
