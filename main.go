@@ -28,7 +28,7 @@ func main() {
 	fmt.Println("Opções disponíveis baseadas no arquivo .aws/config:")
 	for i, profile := range profiles {
 		config := awsConfig[profile]
-		fmt.Printf("%d. Profile: %s, Região: %s, Endpoint URL: %s\n", i+1, profile, config["region"], config["endpoint_url"])
+		fmt.Printf("[%d]. Profile: %s, Região: %s, Endpoint URL: %s\n", i+1, profile, config["region"], config["endpoint_url"])
 	}
 
 	reader := bufio.NewReader(os.Stdin)
@@ -59,10 +59,10 @@ func main() {
 	AttachPolicyByName(sess, userName, "SelfManageMFADevice")
 
 	// Listar grupos existentes
-	group := ListGroups(sess)
+	groups := ListGroups(sess)
 
 	// Adicionar usuário ao grupo selecionado
-	AddUserToGroup(sess, userName, group)
+	AddUserToGroups(sess, userName, groups)
 
 	// Criar acesso ao console AWS para o novo usuário
 	CreateConsoleAccess(sess, selectedProfile, userName)
